@@ -1,6 +1,5 @@
 <?php
 function opensearch($file, $media_wikimedia_iframe_src) {
-	echo '<p>En cours de creation</p>';
 	
 	$adresse = "http://commons.wikimedia.org/w/api.php?action=opensearch&format=xml&search=" . $file . "&limit=100&namespace=6";
 	//RECUPERATION DU XML

@@ -2,7 +2,7 @@
 
 function querry($file, $media_wikimedia_iframe_src) {
 	
-		$adresse = "http://commons.wikimedia.org/w/api.php?action=query&list=allimages&format=xml&aifrom=" . $file . "&ailimit=500&aiprop=url|dimensions";	
+		$adresse = "http://commons.wikimedia.org/w/api.php?action=query&list=allimages&format=xml&aiprefix=" . $file . "&ailimit=500&aiprop=url|dimensions";	
 		
 		//RECUPERATION DU XML
 		$page = file_get_contents($adresse);

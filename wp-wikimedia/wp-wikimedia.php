@@ -4,10 +4,11 @@ Plugin Name: Wordpress Wikimedia
 Plugin URI: https://www.mediawiki.org/wiki/User:Jean-Frédéric/CommonsOnCMS
 Description: Wikimedia.
 Author: Jerome Deboffles Mickael Lemaitre
-Version: 0.0.2
+Version: 0.1.0 (beta)
 Author URI: https://www.mediawiki.org/wiki/User:Jean-Frédéric/CommonsOnCMS
 */
 include 'wp-querry.php';
+include 'wp-search.php';
 include 'wp-opensearch.php';
 if (!class_exists("wp_wikimedia")) {  
   
@@ -18,9 +19,12 @@ if (!class_exists("wp_wikimedia")) {
          */  
         function wp_wikimedia()  
         {  
-			
             add_action('media_buttons', array($this, 'addMediaButton'), 20);
 			add_action('media_upload_wikimedia', array($this, 'media_upload_wikimedia'));
+			//load_scripts();
+			add_action('admin_print_scripts-media-upload-popup', array(&$this, 'load_scripts'));
+			add_action('wp_ajax_wp_wikimedia_down', array(&$this, 'down') );
+
         }
 		
 		
@@ -46,6 +50,63 @@ if (!class_exists("wp_wikimedia")) {
 			wp_iframe('media_upload_type_wikimedia');
 		}
 		
+		function load_scripts() {
+			wp_enqueue_script('ajax_wikimedia_js_script', plugin_dir_url(__FILE__).'/ajax_wikimedia.js', array('jquery'));
+			wp_localize_script('ajax_wikimedia_js_script', 'wp_wikimedia_script', array(
+				 'ajaxurl'  => admin_url('admin-ajax.php'),
+				 'action'	=> 'wp_wikimedia_down',
+				 'nonce'		=> wp_create_nonce('wp_wikimedia_nonce')
+				 )
+			 );
+		}
+		
+		function down() {
+			$error_code = 0;
+			$msg = '';
+			
+			if (! check_ajax_referer('wp_wikimedia_nonce','wpwikimedianonce', FALSE)) {
+				$error_code = 1;
+				$msg        = 'Security error';
+			}
+			else if ( ! current_user_can( 'manage_options' ) ) {
+				$error_code = 2;
+				$msg		= 'Access denied';
+			}
+			else {
+				//ENREGISTREMENT IMAGE
+				$nom = urldecode($_POST['fichier']);
+
+				$nom = htmlentities($nom, ENT_NOQUOTES, 'utf-8');
+				$nom = preg_replace('#&([A-za-z])(?:acute|cedil|circ|grave|orn|ring|slash|th|tilde|uml);#', '\1', $nom);
+				$nom = preg_replace('#&([A-za-z]{2})(?:lig);#', '\1', $nom); // pour les ligatures e.g. '&oelig;'
+				$nom = preg_replace('#&[^;]+;#', '', $nom); // supprime les autres caractères
+				$si = fopen($_POST['fichier'], "r" );  // open URL  
+				$serverImg = stream_get_contents($si);  // read contents  
+				fclose($si);  // close file  
+				/* open file to save to (w+ creates if file does not exist || b opens binary safe [Win32])
+				Seemed to work fine with out the 'b' on Windows NT but just to be safe. */
+				$upload_dir = wp_upload_dir();
+				$pathf = $upload_dir['path'] . substr($nom, strrpos($nom, "/"), strlen($nom));
+				$urlf = $upload_dir['url'] . substr($nom, strrpos($nom, "/"), strlen($nom));
+				$si = fopen($pathf, "w+b" );
+				$erno = fwrite($si, $serverImg);  // write contents to file 
+				$msg = 'Upload OK: ' . $pathf;
+			}
+			echo json_encode(array('error' => $error_code, 'msg' => $msg, 'pathf' => $urlf));
+			exit(); // TRES IMPORTANT, UTILISE DANS LE SCRIPT (VALEUR RETOUR)
+		}
+		
+		/*http://www.weirdog.com/blog/php/supprimer-les-accents-des-caracteres-accentues.html */
+		function wd_remove_accents($str)
+		{
+			
+			$str = preg_replace('#&([A-za-z])(?:acute|cedil|circ|grave|orn|ring|slash|th|tilde|uml);#', '\1', $str);
+			$str = preg_replace('#&([A-za-z]{2})(?:lig);#', '\1', $str); // pour les ligatures e.g. '&oelig;'
+			$str = preg_replace('#&[^;]+;#', '', $str); // supprime les autres caractères
+			
+			return $str;
+		}
+		
     }  
 }  
 
@@ -66,7 +127,8 @@ if (class_exists("wp_wikimedia"))
 		$media_upload_iframe_src = "media-upload.php?post_id=$uploading_iframe_ID";
 		$media_wikimedia_iframe_src = apply_filters('media_wikimedia_iframe_src', "$media_upload_iframe_src&amp;type=wikimedia&amp;tab=wikimedia");
 		
-		ini_set ('user_agent', '”Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.0)”');
+		// ini_set ('user_agent', '”Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.0)”');
+		ini_set ('user_agent', '”CommonOnCMS”');
 		
 		// CSS & SCRIPT
 		css();
@@ -80,6 +142,7 @@ if (class_exists("wp_wikimedia"))
 				<input type="text" name="recherche" align="rigth" value="<?php echo $recherche?>"/><input type="submit" value="Recherche" class="button" align="rigth"/>
 				<br />
 				<select name="search" id="search">
+				   <option value="search" <?php if($engine == "search") echo 'selected';?>>Search</option>
 				   <option value="opensearch" <?php if($engine == "opensearch") echo 'selected';?>>OpenSearch</option>
 				   <option value="querry" <?php if($engine == "querry") echo 'selected';?>>Querry</option>
 				</select>
@@ -104,17 +167,23 @@ if (class_exists("wp_wikimedia"))
 			if(isset($_GET['search']))
 				if($_GET['search'] == "querry")
 					$engine="querry";
+				else if($_GET['search'] == "search")
+					$engine="search";
 			if(isset($_POST['search']))
 				if($_POST['search'] == "querry")
 					$engine="querry";
-				else
+				else if ($_POST['search'] == "opensearch")
 					$engine="opensearch";
+				else
+					$engine="search";
+					
 			
 			?>
 				<p></p><div id="search-filter">
 					<form method="post" action="">
 					<input type="text" name="recherche" align="rigth" value="<?php echo str_replace('%20', ' ', $recherche)?>"/><input type="submit" value="Recherche" class="button" align="rigth"/>
 					<select name="search" id="search">
+					   <option value="search" <?php if($engine == "search") echo 'selected';?>>Search</option>
 					   <option value="opensearch" <?php if($engine == "opensearch") echo 'selected';?>>OpenSearch</option>
 					   <option value="querry" <?php if($engine == "querry") echo 'selected';?>>Querry</option>
 					</select>
@@ -126,6 +195,8 @@ if (class_exists("wp_wikimedia"))
 			//LANCEMENT DE LA RECHERCHE
 			if($engine=="opensearch")
 				opensearch($recherche, $media_wikimedia_iframe_src);
+			else if($engine=="search")
+				search($recherche, $media_wikimedia_iframe_src);
 			else
 				querry($recherche, $media_wikimedia_iframe_src);
 				
@@ -147,12 +218,12 @@ if (class_exists("wp_wikimedia"))
 			$xpath = new DOMXpath($doc);
 		
 			$elements = $xpath->query("//span[@class='licensetpl_short']");
-			$lic = "";
+			$lic = array();
 			if (!is_null($elements)) {
 				foreach ($elements as $element) {	
 					$nodes = $element->childNodes;
 					foreach ($nodes as $node) {
-						$lic .= $node->nodeValue. " - ";
+						$lic[] = $node->nodeValue;
 					}
 				}
 			}
@@ -198,15 +269,61 @@ if (class_exists("wp_wikimedia"))
 			}
 			
 			//LIEN LICENCE licensetpl_link
+			$licea = array();
 			$elements = $xpath->query("//span[@class='licensetpl_link']");
 			if (!is_null($elements)) {
 				foreach ($elements as $element) {
 					$nodes = $element->childNodes;
 					foreach ($nodes as $node) {
-						$lice = $node->nodeValue;
+						$licea[] = $node->nodeValue;
 					}
 				}
 			}
+			$lice = $licea[0];
+			
+			//RECUPERATION AUTEUR
+			$find_autor = false;
+			$autor ="";
+			$elements = $xpath->query("//span[@class='licensetpl_attr']");
+			if (!is_null($elements)) {
+				foreach ($elements as $element) {
+					$nodes = $element->childNodes;
+					foreach ($nodes as $node) {
+					$find_autor =true;
+						//echo '<p>auteur 1 :' . $node->nodeValue . '</p>';
+						$autor .= $node->nodeValue;
+					}
+				}
+			}
+			
+			if(!$find_autor)
+			{
+				$elements = $xpath->query("//span[@class='licensetpl_aut']");
+				if (!is_null($elements)) {
+					foreach ($elements as $element) {
+						$nodes = $element->childNodes;
+						foreach ($nodes as $node) {
+							$find_autor =true;
+							// echo '<p>auteur 2 :' . $node->nodeValue . '</p>';
+							$autor .= $node->nodeValue;
+						}
+					}
+				}
+			}
+			if(!$find_autor)
+			{
+				$elements = $xpath->query("//td[@id='fileinfotpl_aut']/following-sibling::*");
+				if (!is_null($elements)) {
+					foreach ($elements as $element) {
+						$nodes = $element->childNodes;
+						foreach ($nodes as $node) {
+							// echo '<p>auteur 3 :' . $node->nodeValue . '</p>';
+							$autor .= $node->nodeValue;
+						}
+					}
+				}
+			}		
+			
 			
 			//LIEN RETOUR
 			echo '<a href="javascript:window.history.go(-1)">Retour</a>';
@@ -214,7 +331,7 @@ if (class_exists("wp_wikimedia"))
 			if($othresol[0]) // SI il esiste d'autre resolution...
 				echo '<p><img src="' . $othresol[0] . '" align="center"></p>';
 			else // Sinon on affiche resolution full
-				echo '<p><img src="' . $_GET['fichier'] . '"></p>';
+				echo '<p><img src="' . $fullresol . '"></p>';
 			
 			
 			
@@ -223,7 +340,7 @@ if (class_exists("wp_wikimedia"))
 				<table id="basic" class="describe">
 					<tr>
 						<th valign="top" scope="row" class="label">
-						<label for="img_alt">
+						<label for="resol">
 							<span class="alignleft"><?php echo utf8_encode("Résolution");?></span>
 						</label>
 						</th>
@@ -279,23 +396,33 @@ if (class_exists("wp_wikimedia"))
 					</tr>
 					<tr id="cap_licence">
 						<th valign="top" scope="row" class="label">
-							<label for="img_cap">
+							<label for="img_capl">
 								<span class="alignleft"><?php echo utf8_encode('Licence'); ?> </span>
 							</label>
 					</th>
 						<td class="field">
-							<input type="text" id="img_capl" name="img_capl" value="<?php echo $lic; ?>" size="60"/>
+							<select id="img_capl" name="img_capl" onChange='choix2(this.form)'>
+							<?php 
+							for($i=0;$i<sizeof($lic);$i++)
+							{ 
+								echo '<option value="' . $licea[$i] . '"/>' .  $lic[$i] . '</option>';
+							}
+							?>
+							</select>
 						</td>
 					</tr>
 					<tr>
 						<th valign="top" scope="row" class="label">
-							<label for="link_href">
-							<span class="alignleft" id="lb_link_href">Cible du lien (Licence)</span>
-							</label>
+						<label for="img_auteur">
+							<span class="alignleft">Auteur</span>
+						</label>
 						</th>
 						<td class="field">
-							<input type="text" id="link_hreflicence" name="link_hreflicence" value="<?php echo $lice?>"/>
+							<input type="text" id="img_auteur" name="img_auteur" value="<?php echo $autor; ?>" size="60"/>
 						</td>
+					</tr>
+					<tr>
+							<input type="hidden" id="link_hreflicence" name="link_hreflicence" value="<?php echo $lice?>"/>
 					</tr>
 					<tr id="cap_field">
 						<th valign="top" scope="row" class="label">
@@ -309,31 +436,35 @@ if (class_exists("wp_wikimedia"))
 					</tr>
 					<tr>
 						<th valign="top" scope="row" class="label">
-							<label for="link_href">
+							<label for="link_hrefimage">
 							<span class="alignleft" id="lb_link_href">Cible du lien (Image)</span>
 							</label>
 						</th>
 						<td class="field">
 							<input type="text" id="link_hrefimage" name="link_hrefimage" value="<?php echo $_GET['licence'];?>" size="60"/>
 							<input type="hidden" id="link_hreffichier" name="link_hreffichier" value="<?php echo $_GET['fichier'];?>"/>
-						
+							<input type="hidden" id="pathplug" name="pathplug" value="<?php echo plugin_dir_url(__FILE__) . '/loading.gif';?>"/>
+							
 							<br/>
 							<p class="help">Saisissez une adresse web </p>
 						</td>
 					</tr>
 				</table>
 					<p>
-						<input type="button" onclick="request(readData);" value="Picture Download" />
+						<input type="button" id="bdown" name="bdown" value="Picture Download" />
+						<!--onclick="request(readData);" -->
+						<span id="resultdownload" name="resultdownload"></span>
 					</p>
-					<span id="resultdownload" name="resultdownload"></span>
+					
 			</div>
 			<?php
 			echo '<input type="submit" value="Insert" onclick="send_to_editor(1)">';
+			
 		
 		}
 	}
 
-	
+
 		function css() {
 		?>
 		<!-- STYLE CSS WIKIMEDIA TAB -->
@@ -381,12 +512,16 @@ if (class_exists("wp_wikimedia"))
 			var titre = document.getElementById('img_title').value;
 			var alt = document.getElementById('img_alt').value;
 			var legende = document.getElementById('img_cap').value;
-			var licence = document.getElementById('img_capl').value;
+			var select_a = document.getElementById('img_capl');
+			var licence = select_a.options[select_a.selectedIndex].text;
 			var link = document.getElementById('link_hrefimage').value;
-			var link2 = document.getElementById('link_hreflicence').value;
+			var linklic = document.getElementById('link_hreflicence').value;
 			var taille = document.getElementById('resol').value;
+			var auteur = document.getElementById('img_auteur').value;
 			var align;
 			var image;
+			
+			legende = legende;
 			
 			// TAILLE ET ALIGNEMENT
 			var inputs = document.getElementsByTagName('input'),
@@ -399,10 +534,15 @@ if (class_exists("wp_wikimedia"))
 			}
 			
 			var ed;
+			if(linklic != ""){ 
+				var licencetotal = ", <a href=\"" + linklic +  "\"/>" + licence + ")";
+			}else{
+				var licencetotal = ", " + licence + ")";
+			}
 			var total = "<div class=\"wp-caption " + align + "\">";
 				total = total + "<p><a href=\"" + link +  "\"><img title=\"" + titre + "\" src=\"" + taille + "\" alt=\"" + alt + "\"></a></p>";
 
-			total = total + "<p class=\"wp-caption-text\"><a href=\"" + link +  "\">" + licence + "</a>" + legende + "</p></div><div></div>";
+			total = total + "<p class=\"wp-caption-text\">" + legende + "(" + auteur + licencetotal +"</a></p></div><div></div>";
 			image = total;
 			if ( typeof top.tinyMCE != 'undefined' && ( ed = top.tinyMCE.activeEditor ) && !ed.isHidden() ) {
 				// restore caret position on IE
@@ -434,53 +574,29 @@ if (class_exists("wp_wikimedia"))
 			}
 		}
 		
-		
-		function getXMLHttpRequest() {
-			var xhr = null;
-			
-			if (window.XMLHttpRequest || window.ActiveXObject) {
-				if (window.ActiveXObject) {
-					try {
-						xhr = new ActiveXObject("Msxml2.XMLHTTP");
-					} catch(e) {
-						xhr = new ActiveXObject("Microsoft.XMLHTTP");
-					}
-				} else {
-					xhr = new XMLHttpRequest(); 
-				}
-			} else {
-				alert("Votre navigateur ne supporte pas l'objet XMLHTTPRequest...");
-				return null;
-			}
-		
-				return xhr;
-		}
-		
-		function request(callback) {
-			var xhr = getXMLHttpRequest();
-			//alert('ok');
-			xhr.onreadystatechange = function() {
-				if (xhr.readyState == 4 && (xhr.status == 200 || xhr.status == 0)) {
-					callback(xhr.responseText);
-				}
-			};
-			
-			var image = encodeURIComponent(document.getElementById("resol").value);
-			document.getElementById('resultdownload').innerHTML = '<p>Picture downloading...</p>';
-			xhr.open("GET", "../wp-content/plugins/wp-wikimedia/XMLHttpRequest_downloadimg.php?fichier=" + image, true);
-			xhr.send(null);
+		function choix2(form){ 
+			var licence = document.getElementById('img_capl').value;
+			document.getElementById('link_hreflicence').value = licence;
 		}
 
+		
+
+
 		function readData(sData) {
-			document.getElementById('resultdownload').innerHTML += sData;
+			document.getElementById('resultdownload').innerHTML += " done!";
 			if(sData.indexOf("error") == -1)
 			{
-				var oOption = document.createElement("option");
-				document.getElementById('resol').innerHTML = 'test.jpg';
+				var newOption = document.createElement("option");
+				newOption.setAttribute("value",sData);
+				newOption.innerHTML="local";
+				newOption.defaultSelected = true;
+				document.getElementById("resol").appendChild(newOption);
+				//document.getElementById('resol').innerHTML = 'test.jpg';
 			}else{
 				alert('error');
 			}
 		}
+		
 		//-->
 		</script>
 		<?php
